@@ -18,8 +18,8 @@
       background: white;
       border-radius: 20px;
       padding: 40px;
-      max-width: 480px;
-      width: 90%;
+      max-width: 520px;
+      width: 92%;
       box-shadow: 0 20px 60px rgba(0,0,0,0.2);
       text-align: center;
     }
@@ -39,8 +39,31 @@
       transition: transform 0.2s, box-shadow 0.2s;
     }
     .play-btn:hover { transform: scale(1.05); box-shadow: 0 8px 24px rgba(255,87,34,0.4); }
-    .play-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .play-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
     .status { color: #999; font-size: 13px; margin: 8px 0; min-height: 20px; }
+    canvas {
+      width: 100%;
+      height: 60px;
+      border-radius: 8px;
+      margin: 12px 0;
+      background: #fafafa;
+    }
+    .controls {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin: 12px 0;
+    }
+    .control-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: #888;
+    }
+    .control-group input[type="range"] { width: 80px; accent-color: #FF9800; }
+    .control-group label { min-width: 28px; text-align: right; }
     .script {
       text-align: left;
       background: #FFF8E1;
@@ -52,9 +75,7 @@
       color: #555;
     }
     .script p { margin-bottom: 8px; }
-    .info { color: #999; font-size: 12px; margin-top: 16px; }
-    .volume-ctrl { margin: 12px 0; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13px; color: #888; }
-    .volume-ctrl input { width: 100px; }
+    .info { color: #bbb; font-size: 11px; margin-top: 16px; }
   </style>
 </head>
 <body>
@@ -62,13 +83,25 @@
     <div class="logo">&#127837;</div>
     <h1>망고아이 ARS 안내</h1>
     <p class="subtitle">영상영어 망고아이 상담전화 안내 음성</p>
+
     <button class="play-btn" id="playBtn" onclick="togglePlay()">&#9654; 재생</button>
     <div class="status" id="status"></div>
-    <div class="volume-ctrl">
-      <span>BGM</span>
-      <input type="range" id="bgmVol" min="0" max="100" value="25" oninput="updateBGMVol(this.value)">
-      <span id="bgmValLabel">25%</span>
+
+    <canvas id="visualizer"></canvas>
+
+    <div class="controls">
+      <div class="control-group">
+        <span>Voice</span>
+        <input type="range" id="voiceVol" min="0" max="100" value="80" oninput="setVoiceVol(this.value)">
+        <label id="voiceLabel">80%</label>
+      </div>
+      <div class="control-group">
+        <span>BGM</span>
+        <input type="range" id="bgmVol" min="0" max="100" value="30" oninput="setBgmVol(this.value)">
+        <label id="bgmLabel">30%</label>
+      </div>
     </div>
+
     <div class="script">
       <p>안녕하세요, 영상영어 망고아이 입니다.</p>
       <p>상담량이 많아 연결이 지연되고 있습니다.</p>
@@ -77,51 +110,226 @@
       <p>수업 연기 및 연장은 마이페이지에서 가능합니다.</p>
       <p>잠시만 기다려 주시면 상담사가 연결됩니다.</p>
     </div>
-    <div class="info">Powered by GitHub Pages</div>
+    <div class="info">Powered by GitHub Pages &middot; Web Audio API BGM Synthesis</div>
   </div>
 
   <script>
-    let audioCtx, voiceSource, bgmOsc, bgmGain, isPlaying = false, voiceBuffer;
+    // ── State ──
+    let audioCtx = null;
+    let isPlaying = false;
+    let voiceSource = null;
+    let voiceGain = null;
+    let bgmMaster = null;
+    let bgmOscillators = [];
+    let analyser = null;
+    let animFrameId = null;
 
-    function createBGM(ctx) {
-      // Create gentle ambient pad using oscillators
-      const master = ctx.createGain();
-      master.gain.value = 0.06; // Very quiet
+    // ── Chord progressions (frequencies in Hz) ──
+    // I - V - vi - IV in C major, with octave doublings
+    const CHORDS = [
+      [130.81, 164.81, 196.00, 261.63],  // C major
+      [98.00, 146.83, 196.00, 293.66],   // G major
+      [110.00, 164.81, 220.00, 329.63],  // A minor
+      [87.31, 130.81, 174.61, 261.63],   // F major
+    ];
+    const CHORD_DURATION = 4; // seconds per chord
+    const ARPEGGIO_SPEED = 0.3; // seconds between arpeggio notes
 
-      const chordFreqs = [261.63, 329.63, 392.00]; // C major
-      chordFreqs.forEach(freq => {
-        const osc = ctx.createOscillator();
-        osc.type = 'sine';
-        osc.frequency.value = freq;
-        const g = ctx.createGain();
-        g.gain.value = 0.3;
-        osc.connect(g);
-        g.connect(master);
-        osc.start();
+    // ── BGM Synthesis ──
+    function createBGM(ctx, destination) {
+      bgmOscillators = [];
+      bgmMaster = ctx.createGain();
+      bgmMaster.gain.value = 0.05;
 
-        // Add subtle shimmer
-        const osc2 = ctx.createOscillator();
-        osc2.type = 'sine';
-        osc2.frequency.value = freq * 2.003;
-        const g2 = ctx.createGain();
-        g2.gain.value = 0.08;
-        osc2.connect(g2);
-        g2.connect(master);
-        osc2.start();
-      });
+      // Reverb via convolver (synthetic impulse)
+      const convolver = ctx.createConvolver();
+      const irLength = ctx.sampleRate * 1.5;
+      const irBuffer = ctx.createBuffer(2, irLength, ctx.sampleRate);
+      for (let ch = 0; ch < 2; ch++) {
+        const data = irBuffer.getChannelData(ch);
+        for (let i = 0; i < irLength; i++) {
+          data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / irLength, 2.5);
+        }
+      }
+      convolver.buffer = irBuffer;
 
-      return master;
+      const wetGain = ctx.createGain();
+      wetGain.gain.value = 0.3;
+      const dryGain = ctx.createGain();
+      dryGain.gain.value = 0.7;
+
+      bgmMaster.connect(dryGain);
+      bgmMaster.connect(convolver);
+      convolver.connect(wetGain);
+      dryGain.connect(destination);
+      wetGain.connect(destination);
+
+      // Pad layer: slow-evolving chords
+      schedulePadChords(ctx, bgmMaster, 0);
+
+      // Arpeggio layer
+      scheduleArpeggio(ctx, bgmMaster, 0);
+
+      // Sub bass
+      const subOsc = ctx.createOscillator();
+      subOsc.type = 'sine';
+      subOsc.frequency.value = 65.41; // C2
+      const subGain = ctx.createGain();
+      subGain.gain.value = 0.12;
+      subOsc.connect(subGain);
+      subGain.connect(bgmMaster);
+      subOsc.start();
+      bgmOscillators.push(subOsc);
+
+      // Modulate sub bass root to follow chords
+      const totalCycleDur = CHORDS.length * CHORD_DURATION;
+      const bassRoots = [65.41, 49.00, 55.00, 43.65]; // C2, G1, A1, F1
+      const now = ctx.currentTime;
+      for (let cycle = 0; cycle < 20; cycle++) {
+        for (let i = 0; i < bassRoots.length; i++) {
+          const t = now + cycle * totalCycleDur + i * CHORD_DURATION;
+          subOsc.frequency.setValueAtTime(bassRoots[i], t);
+        }
+      }
+
+      return bgmMaster;
     }
 
+    function schedulePadChords(ctx, dest, startOffset) {
+      const now = ctx.currentTime + startOffset;
+      const totalCycles = 20; // ~5 min worth
+
+      for (let cycle = 0; cycle < totalCycles; cycle++) {
+        for (let ci = 0; ci < CHORDS.length; ci++) {
+          const chord = CHORDS[ci];
+          const chordStart = now + (cycle * CHORDS.length + ci) * CHORD_DURATION;
+
+          chord.forEach((freq, ni) => {
+            // Main pad tone
+            const osc = ctx.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+
+            const env = ctx.createGain();
+            env.gain.setValueAtTime(0, chordStart);
+            env.gain.linearRampToValueAtTime(0.15, chordStart + 0.8);
+            env.gain.setValueAtTime(0.15, chordStart + CHORD_DURATION - 0.8);
+            env.gain.linearRampToValueAtTime(0, chordStart + CHORD_DURATION);
+
+            osc.connect(env);
+            env.connect(dest);
+            osc.start(chordStart);
+            osc.stop(chordStart + CHORD_DURATION + 0.1);
+            bgmOscillators.push(osc);
+
+            // Shimmer (detuned octave)
+            const shim = ctx.createOscillator();
+            shim.type = 'sine';
+            shim.frequency.value = freq * 2.003;
+            const shimGain = ctx.createGain();
+            shimGain.gain.setValueAtTime(0, chordStart);
+            shimGain.gain.linearRampToValueAtTime(0.04, chordStart + 1.2);
+            shimGain.gain.linearRampToValueAtTime(0, chordStart + CHORD_DURATION);
+            shim.connect(shimGain);
+            shimGain.connect(dest);
+            shim.start(chordStart);
+            shim.stop(chordStart + CHORD_DURATION + 0.1);
+            bgmOscillators.push(shim);
+          });
+        }
+      }
+    }
+
+    function scheduleArpeggio(ctx, dest, startOffset) {
+      const now = ctx.currentTime + startOffset;
+      const totalCycles = 20;
+
+      for (let cycle = 0; cycle < totalCycles; cycle++) {
+        for (let ci = 0; ci < CHORDS.length; ci++) {
+          const chord = CHORDS[ci];
+          const chordStart = now + (cycle * CHORDS.length + ci) * CHORD_DURATION;
+
+          // Arpeggio pattern: up then down
+          const pattern = [...chord, ...chord.slice(1, -1).reverse()];
+          const notesPerChord = Math.floor(CHORD_DURATION / ARPEGGIO_SPEED);
+
+          for (let n = 0; n < notesPerChord; n++) {
+            const freq = pattern[n % pattern.length] * 2; // One octave up
+            const noteStart = chordStart + n * ARPEGGIO_SPEED;
+
+            const osc = ctx.createOscillator();
+            osc.type = 'triangle';
+            osc.frequency.value = freq;
+
+            const env = ctx.createGain();
+            env.gain.setValueAtTime(0, noteStart);
+            env.gain.linearRampToValueAtTime(0.08, noteStart + 0.02);
+            env.gain.exponentialRampToValueAtTime(0.001, noteStart + ARPEGGIO_SPEED * 0.9);
+
+            osc.connect(env);
+            env.connect(dest);
+            osc.start(noteStart);
+            osc.stop(noteStart + ARPEGGIO_SPEED);
+            bgmOscillators.push(osc);
+          }
+        }
+      }
+    }
+
+    // ── Visualizer ──
+    function startVisualizer() {
+      const canvas = document.getElementById('visualizer');
+      const canvasCtx = canvas.getContext('2d');
+      canvas.width = canvas.offsetWidth * 2;
+      canvas.height = canvas.offsetHeight * 2;
+
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      function draw() {
+        animFrameId = requestAnimationFrame(draw);
+        analyser.getByteFrequencyData(dataArray);
+
+        canvasCtx.fillStyle = '#fafafa';
+        canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const barCount = 48;
+        const step = Math.floor(bufferLength / barCount);
+        const barWidth = canvas.width / barCount - 2;
+
+        for (let i = 0; i < barCount; i++) {
+          const val = dataArray[i * step];
+          const barHeight = (val / 255) * canvas.height * 0.85;
+          const x = i * (barWidth + 2);
+          const y = canvas.height - barHeight;
+
+          const hue = 25 + (i / barCount) * 15; // orange range
+          canvasCtx.fillStyle = `hsla(${hue}, 90%, 55%, ${0.5 + val / 510})`;
+          canvasCtx.fillRect(x, y, barWidth, barHeight);
+        }
+      }
+      draw();
+    }
+
+    function stopVisualizer() {
+      if (animFrameId) {
+        cancelAnimationFrame(animFrameId);
+        animFrameId = null;
+      }
+      const canvas = document.getElementById('visualizer');
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    // ── Playback ──
     async function togglePlay() {
       const btn = document.getElementById('playBtn');
       const status = document.getElementById('status');
 
       if (isPlaying) {
-        if (audioCtx) { audioCtx.close(); audioCtx = null; }
+        stopAll();
         btn.innerHTML = '&#9654; 재생';
         status.textContent = '';
-        isPlaying = false;
         return;
       }
 
@@ -131,42 +339,71 @@
       try {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-        // Load voice MP3
-        const resp = await fetch('mangoai-ars-voice.mp3');
-        const arrayBuf = await resp.arrayBuffer();
-        voiceBuffer = await audioCtx.decodeAudioData(arrayBuf);
+        // Analyser for visualizer
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.connect(audioCtx.destination);
 
-        // Play voice
+        // Load and decode voice MP3
+        const resp = await fetch('mangoai-ars-voice.mp3');
+        if (!resp.ok) throw new Error('MP3 로드 실패');
+        const arrayBuf = await resp.arrayBuffer();
+        const voiceBuffer = await audioCtx.decodeAudioData(arrayBuf);
+
+        // Voice chain: source -> gain -> analyser -> destination
+        voiceGain = audioCtx.createGain();
+        voiceGain.gain.value = parseInt(document.getElementById('voiceVol').value) / 100;
+        voiceGain.connect(analyser);
+
         voiceSource = audioCtx.createBufferSource();
         voiceSource.buffer = voiceBuffer;
-        voiceSource.connect(audioCtx.destination);
+        voiceSource.connect(voiceGain);
         voiceSource.start();
         voiceSource.onended = () => {
-          if (audioCtx) { audioCtx.close(); audioCtx = null; }
+          stopAll();
           btn.innerHTML = '&#9654; 재생';
           status.textContent = '재생 완료';
-          isPlaying = false;
         };
 
-        // Start BGM
-        bgmGain = createBGM(audioCtx);
-        bgmGain.connect(audioCtx.destination);
-        updateBGMVol(document.getElementById('bgmVol').value);
+        // BGM -> analyser
+        createBGM(audioCtx, analyser);
+        setBgmVol(document.getElementById('bgmVol').value);
+
+        // Start visualizer
+        startVisualizer();
 
         btn.innerHTML = '&#9724; 정지';
         btn.disabled = false;
         status.textContent = '재생 중...';
         isPlaying = true;
-
-      } catch(e) {
+      } catch (e) {
         status.textContent = '오류: ' + e.message;
         btn.disabled = false;
+        stopAll();
       }
     }
 
-    function updateBGMVol(val) {
-      document.getElementById('bgmValLabel').textContent = val + '%';
-      if (bgmGain) bgmGain.gain.value = (val / 100) * 0.15;
+    function stopAll() {
+      isPlaying = false;
+      stopVisualizer();
+      bgmOscillators.forEach(o => { try { o.stop(); } catch(_) {} });
+      bgmOscillators = [];
+      if (voiceSource) { try { voiceSource.stop(); } catch(_) {} voiceSource = null; }
+      if (audioCtx) { audioCtx.close(); audioCtx = null; }
+      analyser = null;
+      bgmMaster = null;
+      voiceGain = null;
+      document.getElementById('playBtn').disabled = false;
+    }
+
+    function setVoiceVol(val) {
+      document.getElementById('voiceLabel').textContent = val + '%';
+      if (voiceGain) voiceGain.gain.value = val / 100;
+    }
+
+    function setBgmVol(val) {
+      document.getElementById('bgmLabel').textContent = val + '%';
+      if (bgmMaster) bgmMaster.gain.value = (val / 100) * 0.12;
     }
   </script>
 </body>
