@@ -26,7 +26,21 @@
     .logo { font-size: 48px; margin-bottom: 16px; }
     h1 { color: #333; font-size: 24px; margin-bottom: 8px; }
     .subtitle { color: #666; font-size: 14px; margin-bottom: 24px; }
-    audio { width: 100%; margin: 16px 0; }
+    .play-btn {
+      display: inline-block;
+      background: linear-gradient(135deg, #FF9800, #FF5722);
+      color: white;
+      border: none;
+      border-radius: 50px;
+      padding: 14px 40px;
+      font-size: 18px;
+      cursor: pointer;
+      margin: 16px 0;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .play-btn:hover { transform: scale(1.05); box-shadow: 0 8px 24px rgba(255,87,34,0.4); }
+    .play-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .status { color: #999; font-size: 13px; margin: 8px 0; min-height: 20px; }
     .script {
       text-align: left;
       background: #FFF8E1;
@@ -39,6 +53,8 @@
     }
     .script p { margin-bottom: 8px; }
     .info { color: #999; font-size: 12px; margin-top: 16px; }
+    .volume-ctrl { margin: 12px 0; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13px; color: #888; }
+    .volume-ctrl input { width: 100px; }
   </style>
 </head>
 <body>
@@ -46,10 +62,13 @@
     <div class="logo">&#127837;</div>
     <h1>망고아이 ARS 안내</h1>
     <p class="subtitle">영상영어 망고아이 상담전화 안내 음성</p>
-    <audio controls>
-      <source src="mangoai-ars-voice.mp3" type="audio/mpeg">
-      브라우저가 오디오를 지원하지 않습니다.
-    </audio>
+    <button class="play-btn" id="playBtn" onclick="togglePlay()">&#9654; 재생</button>
+    <div class="status" id="status"></div>
+    <div class="volume-ctrl">
+      <span>BGM</span>
+      <input type="range" id="bgmVol" min="0" max="100" value="25" oninput="updateBGMVol(this.value)">
+      <span id="bgmValLabel">25%</span>
+    </div>
     <div class="script">
       <p>안녕하세요, 영상영어 망고아이 입니다.</p>
       <p>상담량이 많아 연결이 지연되고 있습니다.</p>
@@ -60,5 +79,95 @@
     </div>
     <div class="info">Powered by GitHub Pages</div>
   </div>
+
+  <script>
+    let audioCtx, voiceSource, bgmOsc, bgmGain, isPlaying = false, voiceBuffer;
+
+    function createBGM(ctx) {
+      // Create gentle ambient pad using oscillators
+      const master = ctx.createGain();
+      master.gain.value = 0.06; // Very quiet
+
+      const chordFreqs = [261.63, 329.63, 392.00]; // C major
+      chordFreqs.forEach(freq => {
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        const g = ctx.createGain();
+        g.gain.value = 0.3;
+        osc.connect(g);
+        g.connect(master);
+        osc.start();
+
+        // Add subtle shimmer
+        const osc2 = ctx.createOscillator();
+        osc2.type = 'sine';
+        osc2.frequency.value = freq * 2.003;
+        const g2 = ctx.createGain();
+        g2.gain.value = 0.08;
+        osc2.connect(g2);
+        g2.connect(master);
+        osc2.start();
+      });
+
+      return master;
+    }
+
+    async function togglePlay() {
+      const btn = document.getElementById('playBtn');
+      const status = document.getElementById('status');
+
+      if (isPlaying) {
+        if (audioCtx) { audioCtx.close(); audioCtx = null; }
+        btn.innerHTML = '&#9654; 재생';
+        status.textContent = '';
+        isPlaying = false;
+        return;
+      }
+
+      btn.disabled = true;
+      status.textContent = '음성을 불러오는 중...';
+
+      try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        // Load voice MP3
+        const resp = await fetch('mangoai-ars-voice.mp3');
+        const arrayBuf = await resp.arrayBuffer();
+        voiceBuffer = await audioCtx.decodeAudioData(arrayBuf);
+
+        // Play voice
+        voiceSource = audioCtx.createBufferSource();
+        voiceSource.buffer = voiceBuffer;
+        voiceSource.connect(audioCtx.destination);
+        voiceSource.start();
+        voiceSource.onended = () => {
+          if (audioCtx) { audioCtx.close(); audioCtx = null; }
+          btn.innerHTML = '&#9654; 재생';
+          status.textContent = '재생 완료';
+          isPlaying = false;
+        };
+
+        // Start BGM
+        bgmGain = createBGM(audioCtx);
+        bgmGain.connect(audioCtx.destination);
+        updateBGMVol(document.getElementById('bgmVol').value);
+
+        btn.innerHTML = '&#9724; 정지';
+        btn.disabled = false;
+        status.textContent = '재생 중...';
+        isPlaying = true;
+
+      } catch(e) {
+        status.textContent = '오류: ' + e.message;
+        btn.disabled = false;
+      }
+    }
+
+    function updateBGMVol(val) {
+      document.getElementById('bgmValLabel').textContent = val + '%';
+      if (bgmGain) bgmGain.gain.value = (val / 100) * 0.15;
+    }
+  </script>
 </body>
 </html>
