@@ -1,0 +1,6 @@
+name = "mangoai-ars-voice"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[vars]
+AUDIO_URL = "https://raw.githubusercontent.com/navy111p-sudo/mangoai-ars-voice/main/mangoai-ars-voice.mp3"
