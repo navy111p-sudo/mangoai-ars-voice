@@ -86,6 +86,181 @@
       <input type="range" id="bgmVol" min="0" max="100" value="25" oninput="updateBGMVol(this.value)">
       <span id="bgmValLabel">25%</span>
     </div>
+    <div class="script">
+      <p>안녕하세요, 영상영어 망고아이 입니다.</p>
+      <p>상담량이 많아 연결이 지연되고 있습니다.</p>
+      <p>빠른 상담을 원하시면 홈페이지 또는 카카오톡으로 문의해 주세요.</p>
+      <p>전화를 끊으시면 카카오톡 채널이 자동으로 발송됩니다.</p>
+      <p>수업 연기 및 연장은 마이페이지에서 가능합니다.</p>
+      <p>잠시만 기다려 주시면 상담사가 연결됩니다.</p>
+    </div>
+    <div class="info">Powered by GitHub Pages</div>
+  </div>
+
+  <script>
+    var MP3_URL = 'https://raw.githubusercontent.com/navy111p-sudo/mangoai-ars-voice/main/mangoai-ars-voice.mp3';
+    var audioCtx = null;
+    var bgmGain = null;
+    var cachedBuffer = null;
+    var voiceLabels = ['여자1 (밝은 톤)', '여자2 (차분한 톤)', '남자1 (중저음)', '남자2 (저음)'];
+    var voices = [
+      { rate: 1.05, detune: 200 },
+      { rate: 0.97, detune: -100 },
+      { rate: 0.92, detune: -600 },
+      { rate: 0.85, detune: -900 }
+    ];
+
+    function createBGM(ctx) {
+      var master = ctx.createGain();
+      master.gain.value = 0.06;
+      [261.63, 329.63, 392.00].forEach(function(freq) {
+        var osc = ctx.createOscillator();
+        osc.type = 'sine'; osc.frequency.value = freq;
+        var g = ctx.createGain(); g.gain.value = 0.3;
+        osc.connect(g); g.connect(master); osc.start();
+        var osc2 = ctx.createOscillator();
+        osc2.type = 'sine'; osc2.frequency.value = freq * 2.003;
+        var g2 = ctx.createGain(); g2.gain.value = 0.08;
+        osc2.connect(g2); g2.connect(master); osc2.start();
+      });
+      return master;
+    }
+
+    function playVoice(v) {
+      if (audioCtx) { audioCtx.close(); audioCtx = null; }
+      var statusEl = document.getElementById('status');
+      var infoEl = document.getElementById('voiceInfo');
+      if (v < 0) v = Math.floor(Math.random() * 4);
+      infoEl.textContent = voiceLabels[v];
+      statusEl.textContent = '음성 로딩 중...';
+
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+      var loadAndPlay = function(buffer) {
+        var source = audioCtx.createBufferSource();
+        source.buffer = buffer;
+        source.playbackRate.value = voices[v].rate;
+        source.detune.value = voices[v].detune;
+        source.connect(audioCtx.destination);
+        source.start();
+        source.onended = function() {
+          if (audioCtx) { audioCtx.close(); audioCtx = null; }
+          statusEl.textContent = '재생 완료';
+        };
+        bgmGain = createBGM(audioCtx);
+        bgmGain.connect(audioCtx.destination);
+        updateBGMVol(document.getElementById('bgmVol').value);
+        statusEl.textContent = '재생 중... [' + voiceLabels[v] + ']';
+      };
+
+      if (cachedBuffer) {
+        loadAndPlay(cachedBuffer);
+      } else {
+        fetch(MP3_URL)
+          .then(function(r) { return r.arrayBuffer(); })
+          .then(function(buf) { return audioCtx.decodeAudioData(buf); })
+          .then(function(decoded) {
+            cachedBuffer = decoded;
+            loadAndPlay(decoded);
+          })
+          .catch(function(e) { statusEl.textContent = '오류: ' + e.message; });
+      }
+    }
+
+    function updateBGMVol(val) {
+      document.getElementById('bgmValLabel').textContent = val + '%';
+      if (bgmGain) bgmGain.gain.value = (val / 100) * 0.15;
+    }
+  </script>
+</body>
+</html><!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>망고아이 ARS 안내</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: linear-gradient(135deg, #FF9800 0%, #FF5722 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card {
+      background: white;
+      border-radius: 20px;
+      padding: 40px;
+      max-width: 480px;
+      width: 90%;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+      text-align: center;
+    }
+    .logo { font-size: 48px; margin-bottom: 16px; }
+    h1 { color: #333; font-size: 24px; margin-bottom: 8px; }
+    .subtitle { color: #666; font-size: 14px; margin-bottom: 20px; }
+    .btn {
+      display: inline-block;
+      background: linear-gradient(135deg, #FF9800, #FF5722);
+      color: white;
+      border: none;
+      border-radius: 50px;
+      padding: 12px 24px;
+      font-size: 15px;
+      cursor: pointer;
+      margin: 5px;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .btn:hover { transform: scale(1.05); box-shadow: 0 8px 24px rgba(255,87,34,0.4); }
+    .voice-info {
+      background: #FFF8E1;
+      border-radius: 8px;
+      padding: 10px 16px;
+      margin: 10px 0;
+      font-size: 14px;
+      color: #FF5722;
+      font-weight: bold;
+    }
+    .status { color: #999; font-size: 13px; margin: 8px 0; min-height: 20px; }
+    .script {
+      text-align: left;
+      background: #FFF8E1;
+      border-radius: 12px;
+      padding: 20px;
+      margin-top: 20px;
+      font-size: 14px;
+      line-height: 1.8;
+      color: #555;
+    }
+    .script p { margin-bottom: 8px; }
+    .info { color: #999; font-size: 12px; margin-top: 16px; }
+    .volume-ctrl { margin: 12px 0; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13px; color: #888; }
+    .volume-ctrl input { width: 100px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">&#127837;</div>
+    <h1>망고아이 ARS 안내</h1>
+    <p class="subtitle">4가지 목소리 랜덤 재생 + 배경음악</p>
+    <div>
+      <button class="btn" onclick="playVoice(-1)">&#127922; 랜덤 재생</button>
+    </div>
+    <div style="margin-top:12px">
+      <button class="btn" onclick="playVoice(0)">&#128105; 여자1</button>
+      <button class="btn" onclick="playVoice(1)">&#128105; 여자2</button>
+      <button class="btn" onclick="playVoice(2)">&#128104; 남자1</button>
+      <button class="btn" onclick="playVoice(3)">&#128104; 남자2</button>
+    </div>
+    <div class="voice-info" id="voiceInfo">버튼을 눌러 재생하세요</div>
+    <div class="status" id="status"></div>
+    <div class="volume-ctrl">
+      <span>BGM</span>
+      <input type="range" id="bgmVol" min="0" max="100" value="25" oninput="updateBGMVol(this.value)">
+      <span id="bgmValLabel">25%</span>
+    </div>
     <audio id="player" controls style="width:100%;margin-top:8px"></audio>
     <div class="script">
       <p>안녕하세요, 영상영어 망고아이 입니다.</p>
